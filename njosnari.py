@@ -13,10 +13,10 @@ from scanners import ALL_SCANNERS
 class NjOsnariApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("NJÓSNARI v1.0.0")
+        self.root.title("NJÓSNARI v1.0.0 — Tactical Cyber Suite")
         self.q = queue.Queue()
         
-        # UI Setup
+        # UI Components
         self.btn = tk.Button(root, text="⚡ EXECUTE SECURITY MATRIX", command=self.start)
         self.btn.pack(pady=10)
         self.log = tk.Text(root, bg="#080B0F", fg="#00E5FF", font=("Courier", 10))
@@ -36,7 +36,7 @@ class NjOsnariApp:
                 self.q.put(f"[+] {res}\n")
             except Exception as e:
                 self.q.put(f"[!] Error: {e}\n")
-        self.q.put("[***] MATRIX COMPLETE\n")
+        self.q.put("[***] SECURITY MATRIX EXECUTION COMPLETE\n")
         self.root.after(0, lambda: self.btn.config(state="normal"))
 
     def process_q(self):
@@ -44,7 +44,7 @@ class NjOsnariApp:
         self.root.after(100, self.process_q)
 
 if __name__ == "__main__":
-    # Start msfrpcd op de achtergrond
+    # Start Metasploit RPC daemon background process
     subprocess.Popen(["msfrpcd", "-U", "msf", "-P", "msfpassword", "-S", "-a", "127.0.0.1", "-p", "55553"], 
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     root = tk.Tk()
