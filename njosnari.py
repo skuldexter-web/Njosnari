@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║   NJÓSNARI GUI — Cyber Viking Tactical Recon Dashboard                        ║
+║   NJÓSNARI GUI — Cyber Viking Tactical Recon Dashboard                       ║
 ║   Production-grade Penetration Testing GUI Framework                         ║
 ║   Author  : @s.k.7.l.d                                                       ║
 ║   Version : 1.0.0 (Ultimate Deep Integration Edition)                        ║
@@ -154,12 +154,12 @@ class GuiLogger:
 
     def _ts(self) -> str: return datetime.datetime.now().strftime("%H:%M:%S")
 
-    def info(self, text: str) -> None: self.q.put((self.pane, f"[{self._ts()}] ◈ {text}\n", "info"))
-    def warn(self, text: str) -> None: self.q.put((self.pane, f"[{self._ts()}] ⚠ {text}\n", "warn"))
-    def high(self, text: str) -> None: self.q.put((self.pane, f"[{self._ts()}] ☠ {text}\n", "high"))
-    def safe(self, text: str) -> None: self.q.put((self.pane, f"[{self._ts()}] ✔ {text}\n", "safe"))
-    def dim(self, text: str) -> None:  self.q.put((self.pane, f"[{self._ts()}] ░ {text}\n", "dim"))
-    def ai(self, text: str) -> None:   self.q.put((self.pane, f"[{self._ts()}] 🧠 {text}\n", "ai"))
+    def info(self, text: str) -> None: self.q.put((self.pane, f"[{self._ts()}] {text}\n", "info"))
+    def warn(self, text: str) -> None: self.q.put((self.pane, f"[{self._ts()}] {text}\n", "warn"))
+    def high(self, text: str) -> None: self.q.put((self.pane, f"[{self._ts()}] {text}\n", "high"))
+    def safe(self, text: str) -> None: self.q.put((self.pane, f"[{self._ts()}] {text}\n", "safe"))
+    def dim(self, text: str) -> None:  self.q.put((self.pane, f"[{self._ts()}] {text}\n", "dim"))
+    def ai(self, text: str) -> None:   self.q.put((self.pane, f"[{self._ts()}] {text}\n", "ai"))
 
 def http_request(url: str, method: str = "GET", headers: Optional[Dict[str, str]] = None, body: Optional[bytes] = None) -> Tuple[Optional[int], Dict[str, str], bytes]:
     hdr = {"User-Agent": UA}
@@ -310,7 +310,7 @@ class NjOsnariApp:
         style.map("TNotebook.Tab", background=[("selected", Theme.BG_WIDGET)], foreground=[("selected", Theme.CYAN_NEON)])
 
         self.panes: Dict[str, scrolledtext.ScrolledText] = {}
-        for p_id, title in [("main", "🛡 CORE MATRIX"), ("threat", "🎯 THREAT VECTORS"), ("msf", "🗜 METASPLOIT AUTOMATION"), ("ai", "🧠 AI WAR ROOM")]:
+        for p_id, title in [("main", "CORE MATRIX"), ("threat", "THREAT VECTORS"), ("msf", "METASPLOIT AUTOMATION"), ("ai", "AI WAR ROOM")]:
             frame = tk.Frame(self.notebook, bg=Theme.BG_WIDGET)
             txt = scrolledtext.ScrolledText(frame, bg=Theme.BG_DEEP, fg=Theme.FG_PRIMARY, font=Theme.FONT_MONO, bd=0, highlightthickness=0)
             txt.pack(fill="both", expand=True, padx=2, pady=2)
@@ -330,7 +330,7 @@ class NjOsnariApp:
 
     def start_scan(self) -> None:
         target = self.target_ent.get().strip()
-        self.btn_scan.config(state="disabled", text="🗜 SCANNING & ANALYZING...")
+        self.btn_scan.config(state="disabled", text="SCANNING & ANALYZING...")
         threading.Thread(target=self.engine_worker, args=(target,), daemon=True).start()
 
     def engine_worker(self, raw_target: str) -> None:
@@ -346,7 +346,7 @@ class NjOsnariApp:
             log.safe(f"DNS Structure verified: {hostname} -> {ip}")
         except Exception:
             log.high("DNS Resolving failed. Scan aborted.")
-            self.root.after(0, lambda: self.btn_scan.config(state="normal", text="⚡ EXECUTE SECURITY MATRIX"))
+            self.root.after(0, lambda: self.btn_scan.config(state="normal", text="START RAID"))
             return
 
         state = ScanState(raw_target, f"http://{hostname}", hostname, f"http://{hostname}", ip)
@@ -358,7 +358,7 @@ class NjOsnariApp:
         run_ai_war_room_analysis(state, ailog, msflog)
         
         log.safe("NJÓSNARI Matrix cycle fully completed.")
-        self.root.after(0, lambda: self.btn_scan.config(state="normal", text="⚡ EXECUTE SECURITY MATRIX"))
+        self.root.after(0, lambda: self.btn_scan.config(state="normal", text="START RAID"))
 
 if __name__ == "__main__":
     main_root = tk.Tk()
