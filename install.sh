@@ -1,5 +1,5 @@
 #!/bin/bash
-# Maak dit bestand uitvoerbaar met: chmod +x install.sh
+# Make executable: chmod +x install.sh
 echo "[*] NJÓSNARI Deployment initiated..."
 sudo apt-get update
 sudo apt-get install -y python3-pip python3-tk metasploit-framework
