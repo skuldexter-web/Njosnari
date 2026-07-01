@@ -23,19 +23,15 @@ import re
 import json
 import ssl
 import socket
-import struct
 import time
 import threading
 import urllib.request
 import urllib.parse
 import urllib.error
-import http.client
 import subprocess
-import ipaddress
 import base64
 import hashlib
-import random
-import textwrap
+import hmac
 import datetime
 import concurrent.futures
 from typing import Any, Dict, List, Optional, Tuple
@@ -139,23 +135,33 @@ _ssl_ctx = ssl.create_default_context()
 _ssl_ctx.check_hostname = False
 _ssl_ctx.verify_mode    = ssl.CERT_NONE
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Intercepts 3xx responses and returns them as-is instead of following Location."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # returning None stops urllib from following the redirect
+
+_no_redirect_opener = urllib.request.build_opener(
+    urllib.request.HTTPSHandler(context=_ssl_ctx),
+    _NoRedirectHandler(),
+)
+_redirect_opener = urllib.request.build_opener(
+    urllib.request.HTTPSHandler(context=_ssl_ctx),
+)
+
 def http_get(url: str, headers: Optional[Dict] = None, timeout: int = 8,
              allow_redirects: bool = True) -> Tuple[Optional[int], Dict, bytes]:
     """Returns (status_code, headers_dict, body_bytes). Never raises."""
     merged = {**DEFAULT_HEADERS, **(headers or {})}
     try:
         req = urllib.request.Request(url, headers=merged, method="GET")
-        handler = urllib.request.HTTPSHandler(context=_ssl_ctx)
-        if not allow_redirects:
-            opener = urllib.request.build_opener(handler,
-                                                  urllib.request.HTTPErrorProcessor())
-        else:
-            opener = urllib.request.build_opener(handler)
+        opener = _no_redirect_opener if not allow_redirects else _redirect_opener
         with opener.open(req, timeout=timeout) as resp:
             body = resp.read(1 << 20)  # max 1 MB
             resp_headers = dict(resp.headers)
             return resp.status, resp_headers, body
     except urllib.error.HTTPError as e:
+        # With _NoRedirectHandler, a blocked redirect surfaces here as an HTTPError
+        # carrying the original 3xx status and Location header — exactly what callers need.
         try:
             body = e.read(1 << 16)
         except Exception:
@@ -365,10 +371,10 @@ def scan_sensitive_paths() -> None:
         url = base.rstrip("/") + path
         status, headers, body = http_get(url, timeout=5)
         if status and status not in (404, 410):
-            h = {k.lower(): v for k, v in headers.items()}
             content_len = len(body)
             entry = {"path": path, "status": status, "size": content_len}
-            results["exposed"].append(entry)
+            with _state_lock:
+                results["exposed"].append(entry)
             severity = C.BLOOD if status == 200 else C.YELLOW
             tprint(mod_crit(f"HTTP {status} → {severity}{path}{C.RESET} ({content_len}B)"))
 
@@ -438,13 +444,6 @@ def scan_cookie_security() -> None:
 
 
 # ── [05] CORS ─────────────────────────────────────────────────────────────────
-CORS_ORIGINS = [
-    "https://evil.com",
-    "https://attacker.io",
-    "null",
-    f"https://{state.get('target_host','')}.evil.com",
-]
-
 def scan_cors() -> None:
     module = "05_cors"
     url    = state["target_url"]
@@ -548,23 +547,19 @@ PORT_SERVICES = {
     8888: "HTTP-Dev", 9200: "Elasticsearch", 27017: "MongoDB",
 }
 
-def grab_banner(ip: str, port: int, timeout: float = 3) -> str:
-    try:
-        with socket.create_connection((ip, port), timeout=timeout) as s:
-            s.settimeout(timeout)
-            try:
-                banner = s.recv(1024)
-                return banner.decode("utf-8", errors="replace").strip()[:200]
-            except socket.timeout:
-                return ""
-    except Exception:
-        return ""
-
 def probe_port(args: Tuple) -> Optional[Dict]:
+    """Open a single TCP connection: confirms the port is open AND grabs the
+    banner in the same session, instead of connecting twice (open-check, then
+    a separate grab_banner connect)."""
     ip, port = args
     try:
-        with socket.create_connection((ip, port), timeout=2) as _:
-            banner  = grab_banner(ip, port)
+        with socket.create_connection((ip, port), timeout=2) as s:
+            s.settimeout(2)
+            try:
+                raw_banner = s.recv(1024)
+                banner = raw_banner.decode("utf-8", errors="replace").strip()[:200]
+            except socket.timeout:
+                banner = ""
             service = PORT_SERVICES.get(port, "unknown")
             return {"port": port, "service": service, "banner": banner, "state": "OPEN"}
     except Exception:
@@ -762,9 +757,8 @@ SQL_ERROR_SIGNATURES = [
 def scan_sqli() -> None:
     module = "10_sqli"
     url    = state["target_url"]
-    host   = state["target_host"]
     tprint(mod_header(10, "SQL Injection — Error / Boolean / Time-Blind"))
-    results = {"vulnerable": [], "tested_params": []}
+    results = {"vulnerable": []}
 
     # Extract query params from page links
     status, _, body = http_get(url, timeout=8)
@@ -1091,8 +1085,15 @@ def scan_waf_cdn() -> None:
     status, headers, body = http_get(url, timeout=8)
     h_str   = json.dumps({k.lower(): v.lower() for k, v in headers.items()})
 
-    # Trigger WAF with aggressive payload
-    waf_trigger_url = url + "/?id=1%20UNION%20SELECT%201,2,3--&<script>alert(1)</script>"
+    # Trigger WAF with aggressive payload — build the query string properly so it
+    # merges onto the existing path/query instead of appending a stray "/?" segment
+    parsed_waf   = urllib.parse.urlparse(url)
+    waf_params   = dict(urllib.parse.parse_qsl(parsed_waf.query))
+    waf_params["id"]  = "1 UNION SELECT 1,2,3--"
+    waf_params["xss"] = "<script>alert(1)</script>"
+    waf_trigger_url = urllib.parse.urlunparse(
+        parsed_waf._replace(query=urllib.parse.urlencode(waf_params))
+    )
     st2, hdrs2, body2 = http_get(waf_trigger_url, timeout=8)
     h_str2  = json.dumps({k.lower(): v.lower() for k, v in hdrs2.items()})
     body2_s = (body2 or b"").decode("utf-8", errors="replace").lower()
@@ -1462,7 +1463,10 @@ def scan_auth() -> None:
             responses.append(st)
         elapsed = time.time() - t0
 
-        if len(set(responses)) == 1 and elapsed < 5:
+        successful = [r for r in responses if r is not None]
+        if not successful:
+            tprint(mod_warn("All 10 login probes failed to connect — target may be unreachable or blocking probes."))
+        elif len(set(successful)) == 1 and len(successful) == len(responses) and elapsed < 5:
             tprint(mod_crit(
                 "Possible NO RATE LIMITING — 10 login attempts in "
                 f"{elapsed:.1f}s with uniform responses!"
@@ -1575,7 +1579,7 @@ def scan_google_dorks() -> None:
 
 
 # ── [24] Email Harvesting ────────────────────────────────────────────────────
-EMAIL_REGEX = re.compile(r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Z|a-z]{2,}\b')
+EMAIL_REGEX = re.compile(r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b')
 
 HARVEST_PATHS = ["/", "/contact", "/about", "/team", "/staff",
                  "/support", "/help", "/sitemap.xml", "/humans.txt"]
@@ -1613,7 +1617,7 @@ LFI_PARAMS = ["file", "page", "include", "path", "dir", "document", "root",
               "inc", "locate", "show", "site", "type", "view", "content",
               "layout", "mod", "module", "cat", "p", "lang", "language",
               "section", "chapter", "prefix", "suffix", "filename",
-              "module", "url", "conf", "detail", "load", "src"]
+              "url", "conf", "detail", "load", "src"]
 
 LFI_PAYLOADS = [
     "../etc/passwd",
@@ -1677,6 +1681,12 @@ def scan_lfi() -> None:
 
 
 # ── [26] JWT Weakness Checker ────────────────────────────────────────────────
+def _jwt_decode_part(p: str) -> dict:
+    """Base64url-decode a single JWT segment (header or payload) to a dict.
+    Module-level so it isn't recreated on every loop iteration in scan_jwt()."""
+    p += "=" * (4 - len(p) % 4)
+    return json.loads(base64.urlsafe_b64decode(p))
+
 def scan_jwt() -> None:
     module = "26_jwt"
     url    = state["target_url"]
@@ -1717,12 +1727,8 @@ def scan_jwt() -> None:
             if len(parts) != 3:
                 continue
 
-            def decode_part(p: str) -> dict:
-                p += "=" * (4 - len(p) % 4)
-                return json.loads(base64.urlsafe_b64decode(p))
-
-            header  = decode_part(parts[0])
-            payload = decode_part(parts[1])
+            header  = _jwt_decode_part(parts[0])
+            payload = _jwt_decode_part(parts[1])
 
             alg  = header.get("alg", "unknown").lower()
             exp  = payload.get("exp", None)
@@ -1753,10 +1759,9 @@ def scan_jwt() -> None:
                                 "supersecret", "jwt_secret", "mysecret"]
                 header_b64   = parts[0]
                 payload_b64  = parts[1]
-                import hmac as hmaclib
                 for secret in weak_secrets:
                     sig_test = base64.urlsafe_b64encode(
-                        hmaclib.new(
+                        hmac.new(
                             secret.encode(),
                             f"{header_b64}.{payload_b64}".encode(),
                             hashlib.sha256
@@ -1900,37 +1905,6 @@ def scan_xxe() -> None:
 # =============================================================================
 #  ORCHESTRATOR — Run all 28 modules concurrently
 # =============================================================================
-SCANNER_MODULES = [
-    scan_security_headers,
-    scan_tls_ssl,
-    scan_sensitive_paths,
-    scan_cookie_security,
-    scan_cors,
-    scan_http_methods,
-    scan_ports,
-    scan_tech_fingerprint,
-    scan_cve,
-    scan_sqli,
-    scan_xss,
-    scan_open_redirect,
-    scan_subdomains,
-    scan_dns_email_security,
-    scan_waf_cdn,
-    scan_js_secrets,
-    scan_request_smuggling,
-    scan_directory_fuzz,
-    scan_ssrf,
-    scan_clickjacking,
-    scan_auth,
-    scan_asn_reputation,
-    scan_google_dorks,
-    scan_email_harvest,
-    scan_lfi,
-    scan_jwt,
-    scan_idor,
-    scan_xxe,
-]
-
 def run_all_scanners() -> None:
     """
     Fire all 28 modules. Some must run sequentially (CVE depends on port scan;
