@@ -18,7 +18,6 @@
 # =============================================================================
 
 import sys
-import os
 import re
 import json
 import ssl
@@ -40,7 +39,6 @@ from pathlib import Path
 # ── Dependency Guard ──────────────────────────────────────────────────────────
 try:
     import dns.resolver
-    import dns.exception
     HAS_DNSPYTHON = True
 except ImportError:
     HAS_DNSPYTHON = False
@@ -2389,9 +2387,6 @@ def main() -> None:
     tprint(f"  Host       : {host}")
     tprint(f"  IP Address : {ip}{C.RESET}\n")
 
-    # Update CORS origins with real host
-    CORS_ORIGINS[3] = f"https://{host}.evil.com"
-
     # ── Phase 1: Live Feed Scan ───────────────────────────────────────────────
     run_all_scanners()
     print_summary()
@@ -2443,4 +2438,3 @@ if __name__ == "__main__":
         tprint(f"\n{C.BLOOD}[FATAL]{C.RESET} {e}")
         import traceback; traceback.print_exc()
         sys.exit(1)
-
